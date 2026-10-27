@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { supabase } from "./lib/supabase.js";
 
 const STORAGE_KEY = "shiftboard-lite.v1";
 const SHIFT_TYPES = [
