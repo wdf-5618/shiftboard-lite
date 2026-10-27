@@ -147,7 +147,7 @@ function AuthScreen() {
     try {
       const result = mode === "signin"
         ? await supabase.auth.signInWithPassword({ email: email.trim(), password })
-        : await supabase.auth.signUp({ email: email.trim(), password, options: { emailRedirectTo: window.location.origin } });
+        : await supabase.auth.signUp({ email: email.trim(), password });
       if (result.error) throw result.error;
       if (mode === "signup" && !result.data.session) {
         setMessage("Account created. Check your email for the confirmation link, then sign in here.");
