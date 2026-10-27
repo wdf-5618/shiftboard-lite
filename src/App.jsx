@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { supabase } from "./lib/supabase.js";
 
 const STORAGE_KEY = "shiftboard-lite.v1";
 const SHIFT_TYPES = [
@@ -122,9 +123,72 @@ function Modal({ title, description, onClose, children }) {
   return <div className="fixed inset-0 z-40 flex items-end justify-center bg-[#14211f]/45 p-0 backdrop-blur-[2px] sm:items-center sm:p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section role="dialog" aria-modal="true" aria-labelledby="modal-title" className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-3xl border border-line bg-white p-5 shadow-2xl sm:rounded-3xl sm:p-6"><div className="mb-5 flex items-start justify-between gap-4"><div><h2 id="modal-title" className="text-xl font-semibold">{title}</h2><p className="mt-1.5 text-sm leading-5 text-muted">{description}</p></div><button type="button" onClick={onClose} aria-label="Close dialog" className="rounded-xl p-2 text-muted hover:bg-[#f1f3ed] hover:text-ink">×</button></div>{children}</section></div>;
 }
 
+
+function mapStaffRow(row) {
+  return { id: row.id, name: row.name, role: row.role, initials: row.initials || initials(row.name), color: row.color || "#dce5d9" };
+}
+function mapShiftRow(row) {
+  return { id: row.id, date: row.shift_date, type: row.shift_type, staffId: row.staff_member_id || null, note: row.note || "" };
+}
+function LoadingScreen({ message = "Loading your workspace…" }) {
+  return <div className="flex min-h-screen items-center justify-center bg-canvas px-5 text-ink"><div className="w-full max-w-sm rounded-3xl border border-line bg-white p-8 text-center shadow-sm"><div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-forest text-xl font-black text-white">S</div><h1 className="mt-5 text-xl font-semibold">ShiftBoard Lite</h1><p className="mt-2 text-sm text-muted">{message}</p></div></div>;
+}
+function AuthScreen() {
+  const [mode, setMode] = useState("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+
+  async function submit(event) {
+    event.preventDefault();
+    setBusy(true); setError(""); setMessage("");
+    try {
+      const result = mode === "signin"
+        ? await supabase.auth.signInWithPassword({ email: email.trim(), password })
+        : await supabase.auth.signUp({ email: email.trim(), password });
+      if (result.error) throw result.error;
+      if (mode === "signup" && !result.data.session) {
+        setMessage("Account created. Check your email for the confirmation link, then sign in here.");
+      } else {
+        setMessage("Signed in. Loading your private workspace…");
+      }
+    } catch (err) {
+      setError(err?.message || "Authentication failed. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <div className="flex min-h-screen items-center justify-center bg-canvas px-4 py-10 text-ink">
+    <div className="w-full max-w-md rounded-3xl border border-line bg-white p-6 shadow-[0_8px_36px_rgba(31,42,42,0.06)] sm:p-8">
+      <div className="flex items-center gap-3"><span className="flex h-11 w-11 items-center justify-center rounded-[14px] bg-forest text-lg font-black text-white">S</span><div><p className="text-lg font-bold tracking-tight">ShiftBoard Lite</p><p className="text-xs text-muted">Staff scheduling workspace</p></div></div>
+      <h1 className="mt-8 text-2xl font-semibold tracking-tight">{mode === "signin" ? "Welcome back" : "Create your workspace"}</h1>
+      <p className="mt-2 text-sm leading-6 text-muted">{mode === "signin" ? "Sign in to view and manage your team's schedule." : "Create an account to save your team's schedule to your own database workspace."}</p>
+      <form className="mt-6 space-y-4" onSubmit={submit}>
+        {error && <div role="alert" className="rounded-xl border border-[#f0d0ca] bg-[#fff5f2] px-3.5 py-3 text-sm text-[#9d4537]">{error}</div>}
+        {message && <div role="status" className="rounded-xl border border-[#d8e7ce] bg-[#f4f9ef] px-3.5 py-3 text-sm text-forest">{message}</div>}
+        <Field label="Email address"><input className={inputClass} type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} maxLength={254} required /></Field>
+        <Field label="Password" hint={mode === "signup" ? "Use at least 8 characters." : undefined}><input className={inputClass} type="password" autoComplete={mode === "signin" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} minLength={mode === "signup" ? 8 : undefined} required /></Field>
+        <button type="submit" disabled={busy} className="flex w-full items-center justify-center rounded-xl bg-forest px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#2d5148] disabled:cursor-wait disabled:opacity-60">{busy ? "Please wait…" : mode === "signin" ? "Sign in" : "Create account"}</button>
+      </form>
+      <p className="mt-5 text-center text-sm text-muted">{mode === "signin" ? "New to ShiftBoard Lite?" : "Already have an account?"}{" "}<button type="button" className="font-semibold text-forest underline underline-offset-4" onClick={() => { setMode(mode === "signin" ? "signup" : "signin"); setError(""); setMessage(""); }}>{mode === "signin" ? "Create an account" : "Sign in"}</button></p>
+      <p className="mt-6 border-t border-line pt-4 text-xs leading-5 text-muted">Use fictional staff details for this learning project. Your schedule is scoped to your signed-in account.</p>
+    </div>
+  </div>;
+}
+
 export default function App() {
   const todayKey = dateKey(new Date());
-  const [saved, setSaved] = useState(loadState);
+  const cloudEnabled = Boolean(supabase);
+  const [authSession, setAuthSession] = useState(null);
+  const [authReady, setAuthReady] = useState(!cloudEnabled);
+  const [workspace, setWorkspace] = useState(null);
+  const [cloudLoading, setCloudLoading] = useState(cloudEnabled);
+  const [cloudError, setCloudError] = useState("");
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [saved, setSaved] = useState(() => cloudEnabled ? { staff: [], shifts: [] } : loadState());
   const [view, setView] = useState("overview");
   const [weekOffset, setWeekOffset] = useState(0);
   const [modal, setModal] = useState(null);
@@ -136,7 +200,118 @@ export default function App() {
   const [shiftForm, setShiftForm] = useState({ date: todayKey, type: "opening", staffId: "", note: "" });
   const [teamForm, setTeamForm] = useState({ name: "", role: "Service specialist" });
 
-  useEffect(() => { try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(saved)); } catch (e) { console.warn("ShiftBoard Lite could not save local data.", e); } }, [saved]);
+  useEffect(() => {
+    if (cloudEnabled) return;
+    try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(saved)); }
+    catch (e) { console.warn("ShiftBoard Lite could not save local data.", e); }
+  }, [saved, cloudEnabled]);
+
+  useEffect(() => {
+    if (!supabase) return undefined;
+    let active = true;
+    supabase.auth.getSession().then(({ data, error: sessionError }) => {
+      if (!active) return;
+      if (sessionError) setCloudError(sessionError.message);
+      setAuthSession(data?.session || null);
+      setAuthReady(true);
+      setCloudLoading(Boolean(data?.session));
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (!active) return;
+      setAuthSession(nextSession);
+      if (nextSession) {
+        setCloudLoading(true);
+        setCloudError("");
+      } else {
+        setWorkspace(null);
+        setSaved({ staff: [], shifts: [] });
+        setCloudLoading(false);
+        setCloudError("");
+      }
+    });
+    return () => { active = false; subscription.unsubscribe(); };
+  }, []);
+
+  useEffect(() => {
+    if (!cloudEnabled || !authSession?.user?.id) return undefined;
+    let active = true;
+    async function loadWorkspace() {
+      setCloudLoading(true);
+      setCloudError("");
+      try {
+        const user = authSession.user;
+        let { data: currentWorkspace, error: workspaceError } = await supabase
+          .from("workspaces").select("*").eq("owner_id", user.id).maybeSingle();
+        if (workspaceError) throw workspaceError;
+        if (!currentWorkspace) {
+          const created = await supabase.from("workspaces")
+            .insert({ owner_id: user.id, name: "Northstar Services" }).select("*").single();
+          if (created.error && created.error.code !== "23505") throw created.error;
+          if (created.data) currentWorkspace = created.data;
+          else {
+            const retry = await supabase.from("workspaces").select("*").eq("owner_id", user.id).maybeSingle();
+            if (retry.error) throw retry.error;
+            currentWorkspace = retry.data;
+          }
+        }
+        if (!currentWorkspace) throw new Error("Your workspace could not be loaded. Please try again.");
+
+        const [staffResult, shiftsResult] = await Promise.all([
+          supabase.from("staff_members").select("*").eq("workspace_id", currentWorkspace.id).order("created_at"),
+          supabase.from("shifts").select("*").eq("workspace_id", currentWorkspace.id).order("shift_date").order("shift_type"),
+        ]);
+        if (staffResult.error) throw staffResult.error;
+        if (shiftsResult.error) throw shiftsResult.error;
+        let staffRows = staffResult.data || [];
+        let shiftRows = shiftsResult.data || [];
+
+        if (staffRows.length === 0 && shiftRows.length === 0) {
+          const seededStaff = await supabase.from("staff_members").insert(
+            INITIAL_TEAM.map((member) => ({
+              workspace_id: currentWorkspace.id,
+              name: member.name,
+              role: member.role,
+              initials: member.initials,
+              color: member.color,
+            }))
+          ).select("*");
+          if (seededStaff.error) throw seededStaff.error;
+          staffRows = seededStaff.data || [];
+          const idByInitials = new Map(staffRows.map((member) => [member.initials, member.id]));
+          const seedRows = seedShifts().map((shift) => {
+            const originalMember = INITIAL_TEAM.find((member) => member.id === shift.staffId);
+            return {
+              workspace_id: currentWorkspace.id,
+              staff_member_id: originalMember ? idByInitials.get(originalMember.initials) || null : null,
+              shift_date: shift.date,
+              shift_type: shift.type,
+              note: shift.note || "",
+            };
+          });
+          const seededShifts = await supabase.from("shifts").insert(seedRows);
+          if (seededShifts.error) throw seededShifts.error;
+          const [staffReload, shiftReload] = await Promise.all([
+            supabase.from("staff_members").select("*").eq("workspace_id", currentWorkspace.id).order("created_at"),
+            supabase.from("shifts").select("*").eq("workspace_id", currentWorkspace.id).order("shift_date").order("shift_type"),
+          ]);
+          if (staffReload.error) throw staffReload.error;
+          if (shiftReload.error) throw shiftReload.error;
+          staffRows = staffReload.data || [];
+          shiftRows = shiftReload.data || [];
+        }
+
+        if (!active) return;
+        setWorkspace(currentWorkspace);
+        setSaved({ staff: staffRows.map(mapStaffRow), shifts: shiftRows.map(mapShiftRow) });
+      } catch (err) {
+        if (active) setCloudError(err?.message || "The workspace could not be loaded.");
+      } finally {
+        if (active) setCloudLoading(false);
+      }
+    }
+    loadWorkspace();
+    return () => { active = false; };
+  }, [cloudEnabled, authSession?.user?.id, loadAttempt]);
 
   const weekStart = useMemo(() => addDays(mondayOf(new Date()), weekOffset * 7), [weekOffset]);
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => { const d = addDays(weekStart, i); return { date: d, key: dateKey(d), weekday: d.toLocaleDateString("en", { weekday: "short" }), num: d.getDate() }; }), [weekStart]);
@@ -150,6 +325,9 @@ export default function App() {
   const weekLabel = dateLabel(startKey, { month: "short", day: "numeric" }) + " – " + dateLabel(endKey, { month: "short", day: "numeric", year: weekStart.getFullYear() !== addDays(weekStart, 6).getFullYear() ? "numeric" : undefined });
   const todayShifts = saved.shifts.filter((s) => s.date === todayKey).sort((a, b) => shiftType(a.type).start.localeCompare(shiftType(b.type).start));
   const pageLabel = NAV.find((n) => n.id === view)?.label || "Overview";
+  const workspaceName = workspace?.name || "Northstar Services";
+  const signedInName = authSession?.user?.email || "Thet Paing Soe";
+  const signedInInitials = initials((signedInName.split("@")[0] || "Thet Paing Soe").replace(/[._-]+/g, " "));
   const filteredTeam = saved.staff.filter((m) => (m.name + " " + m.role).toLowerCase().includes(teamSearch.toLowerCase()));
   const coverageList = coverageFilter === "open" ? weekShifts.filter((s) => !s.staffId) : coverageFilter === "assigned" ? weekShifts.filter((s) => !!s.staffId) : weekShifts;
 
@@ -167,27 +345,52 @@ export default function App() {
     setError("");
     setModal("shift");
   }
-  function saveShift(event) {
+  async function saveShift(event) {
     event.preventDefault(); setError("");
     const item = { id: editingShiftId || idFor("shift"), date: shiftForm.date, type: shiftForm.type, staffId: shiftForm.staffId || null, note: shiftForm.note.trim() };
     if (!item.date || !SHIFT_TYPES.some((t) => t.id === item.type)) { setError("Choose a valid date and shift window."); return; }
     if (item.staffId && saved.shifts.some((s) => s.id !== editingShiftId && s.staffId === item.staffId && s.date === item.date && overlaps(s, item))) {
       setError("That team member already has an overlapping shift on this date. Choose another person or time."); return;
     }
-    setSaved((current) => ({ ...current, shifts: editingShiftId ? current.shifts.map((s) => s.id === editingShiftId ? item : s) : current.shifts.concat(item) }));
+    let persistedItem = item;
+    if (cloudEnabled) {
+      if (!workspace) { setError("Your workspace is still loading. Please try again."); return; }
+      const row = { workspace_id: workspace.id, shift_date: item.date, shift_type: item.type, staff_member_id: item.staffId, note: item.note };
+      if (editingShiftId) row.id = editingShiftId;
+      const result = await supabase.from("shifts").upsert(row).select("*").single();
+      if (result.error) {
+        setError(result.error.message?.includes("overlapping")
+          ? "That team member already has an overlapping shift on this date. Choose another person or time."
+          : result.error.message || "Could not save the shift. Please try again.");
+        return;
+      }
+      persistedItem = mapShiftRow(result.data);
+    }
+    setSaved((current) => ({ ...current, shifts: editingShiftId ? current.shifts.map((s) => s.id === editingShiftId ? persistedItem : s) : current.shifts.concat(persistedItem) }));
     setModal(null);
     toastMessage(editingShiftId ? "Shift updated." : item.staffId ? "Shift added to the schedule." : "Open shift added to coverage.");
   }
-  function removeShift() {
-    if (!editingShiftId || !window.confirm("Delete this shift from the local demo schedule?")) return;
+  async function removeShift() {
+    if (!editingShiftId || !window.confirm("Delete this shift from the workspace schedule?")) return;
+    if (cloudEnabled) {
+      const result = await supabase.from("shifts").delete().eq("id", editingShiftId).eq("workspace_id", workspace.id);
+      if (result.error) { setError(result.error.message || "Could not delete the shift."); return; }
+    }
     setSaved((current) => ({ ...current, shifts: current.shifts.filter((s) => s.id !== editingShiftId) }));
     setModal(null); toastMessage("Shift deleted.");
   }
-  function addTeamMember(event) {
+  async function addTeamMember(event) {
     event.preventDefault(); setError("");
     const name = teamForm.name.trim();
     if (name.length < 2) { setError("Enter a team member name."); return; }
-    const person = { id: idFor("staff"), name, role: teamForm.role, initials: initials(name), color: COLORS[saved.staff.length % COLORS.length] };
+    let person = { id: idFor("staff"), name, role: teamForm.role, initials: initials(name), color: COLORS[saved.staff.length % COLORS.length] };
+    if (cloudEnabled) {
+      const result = await supabase.from("staff_members").insert({
+        workspace_id: workspace.id, name, role: teamForm.role, initials: person.initials, color: person.color,
+      }).select("*").single();
+      if (result.error) { setError(result.error.message || "Could not add the team member."); return; }
+      person = mapStaffRow(result.data);
+    }
     setSaved((current) => ({ ...current, staff: current.staff.concat(person) }));
     setTeamForm({ name: "", role: "Service specialist" }); setModal(null); toastMessage(name + " added to the team.");
   }
@@ -195,26 +398,36 @@ export default function App() {
     if (!window.confirm("Reset this browser's demo schedule to the sample data?")) return;
     setSaved({ staff: INITIAL_TEAM, shifts: seedShifts() }); setWeekOffset(0); setView("overview"); toastMessage("Demo data reset.");
   }
+  async function signOut() {
+    const result = await supabase.auth.signOut();
+    if (result.error) setCloudError(result.error.message);
+  }
+
+  if (cloudEnabled && !authReady) return <LoadingScreen message="Checking your sign-in…" />;
+  if (cloudEnabled && !authSession) return <AuthScreen />;
+  if (cloudEnabled && cloudLoading) return <LoadingScreen />;
+  if (cloudEnabled && cloudError && !workspace) return <div className="flex min-h-screen items-center justify-center bg-canvas px-4 py-10 text-ink"><div className="w-full max-w-md rounded-3xl border border-line bg-white p-7"><h1 className="text-xl font-semibold">Could not load workspace</h1><p role="alert" className="mt-3 text-sm leading-6 text-muted">{cloudError}</p><div className="mt-5 flex gap-2"><Button onClick={() => setLoadAttempt((value) => value + 1)}>Try again</Button><Button kind="outline" onClick={signOut}>Sign out</Button></div></div></div>;
 
   return <div className="min-h-screen bg-canvas text-ink">
     <div className="min-h-screen lg:grid lg:grid-cols-[248px_minmax(0,1fr)]">
       <aside className="flex flex-col bg-forest px-5 pb-4 pt-5 text-white lg:sticky lg:top-0 lg:h-screen">
         <button type="button" onClick={() => setView("overview")} className="flex items-center gap-3 px-2 text-left text-white"><span className="flex h-10 w-10 items-center justify-center rounded-[13px] bg-leaf text-lg font-black text-forest">S</span><span><span className="block text-[17px] font-bold tracking-tight">shiftboard</span><span className="block text-[10px] font-semibold uppercase tracking-[0.2em] text-white/55">lite workspace</span></span></button>
-        <div className="mt-7 rounded-2xl border border-white/10 bg-white/[0.06] p-3.5"><p className="text-[10px] font-bold uppercase tracking-[0.17em] text-white/45">Workspace</p><div className="mt-2 flex items-center gap-2.5"><span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-sm font-bold">NS</span><span><span className="block text-sm font-semibold">Northstar Services</span><span className="mt-0.5 block text-xs text-white/45">Demo team · {saved.staff.length} members</span></span></div></div>
+        <div className="mt-7 rounded-2xl border border-white/10 bg-white/[0.06] p-3.5"><p className="text-[10px] font-bold uppercase tracking-[0.17em] text-white/45">Workspace</p><div className="mt-2 flex items-center gap-2.5"><span className="flex h-9 w-9 items-center justify-center rounded-xl bg-white/10 text-sm font-bold">NS</span><span><span className="block text-sm font-semibold">{workspaceName}</span><span className="mt-0.5 block text-xs text-white/45">Demo team · {saved.staff.length} members</span></span></div></div>
         <p className="mb-2 mt-7 px-3 text-[10px] font-bold uppercase tracking-[0.17em] text-white/40">Workspace</p>
         <nav className="flex flex-wrap gap-1 lg:block lg:space-y-1" aria-label="Main navigation">
           {NAV.map((n) => <button key={n.id} type="button" onClick={() => setView(n.id)} className={"flex min-w-[calc(50%-4px)] flex-1 items-center gap-3 rounded-xl px-3.5 py-3 text-left text-sm font-semibold transition lg:w-full " + (view === n.id ? "bg-leaf text-forest shadow-sm" : "text-white/65 hover:bg-white/[0.08] hover:text-white")}><span className="w-5 text-center text-base">{n.icon}</span><span>{n.label}</span>{n.id === "coverage" && openShifts.length > 0 && <span className={"ml-auto rounded-full px-2 py-0.5 text-[11px] font-bold " + (view === n.id ? "bg-forest/10 text-forest" : "bg-white/10 text-white")}>{openShifts.length}</span>}</button>)}
         </nav>
-        <div className="mt-6 hidden rounded-2xl border border-white/10 bg-white/[0.05] p-4 lg:mt-auto lg:block"><div className="flex items-center gap-2 text-leaf"><span>✓</span><span className="text-xs font-bold">Local demo mode</span></div><p className="mt-2 text-xs leading-5 text-white/50">Your sample schedule stays in this browser. It is not shared with a real team.</p><button type="button" onClick={resetDemo} className="mt-3 text-xs font-semibold text-white/70 underline decoration-white/25 underline-offset-4 hover:text-white">Reset demo data</button></div>
-        <div className="mt-4 flex items-center gap-3 border-t border-white/10 px-2 pt-4"><span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#e7c6ad] text-xs font-bold text-ink">TP</span><span><span className="block text-sm font-semibold">Workspace owner</span><span className="block text-xs text-white/45">Learning project</span></span></div>
+        <div className="mt-6 hidden rounded-2xl border border-white/10 bg-white/[0.05] p-4 lg:mt-auto lg:block"><div className="flex items-center gap-2 text-leaf"><span>✓</span><span className="text-xs font-bold">{cloudEnabled ? "Private cloud workspace" : "Local demo mode"}</span></div><p className="mt-2 text-xs leading-5 text-white/50">{cloudEnabled ? "Your team and schedule are saved to your private account workspace." : "Your sample schedule stays in this browser. It is not shared with a real team."}</p>{!cloudEnabled && <button type="button" onClick={resetDemo} className="mt-3 text-xs font-semibold text-white/70 underline decoration-white/25 underline-offset-4 hover:text-white">Reset demo data</button>}</div>
+        <div className="mt-4 flex items-center gap-3 border-t border-white/10 px-2 pt-4"><span className="flex h-9 w-9 items-center justify-center rounded-full bg-[#e7c6ad] text-xs font-bold text-ink">TP</span><span><span className="block max-w-[150px] truncate text-sm font-semibold">{signedInName}</span><span className="block text-xs text-white/45">{cloudEnabled ? "Signed in" : "Learning project"}</span></span></div>
       </aside>
 
       <main id="main" className="min-w-0 px-4 pb-10 pt-5 sm:px-7 lg:px-10 lg:pt-8">
-        <header className="mb-8 flex flex-wrap items-center justify-between gap-4 border-b border-line pb-5"><div className="flex items-center gap-2 text-xs font-medium text-muted"><span>Northstar Services</span><span className="text-[#a4aea7]">/</span><span className="text-ink">{pageLabel}</span></div><div className="flex items-center gap-3"><span className="hidden rounded-lg bg-white px-3 py-2 text-xs text-muted shadow-sm sm:inline-flex"><span className="mr-2 text-[#7f8a85]">Today</span>{dateLabel(todayKey, { weekday: "short", month: "short", day: "numeric" })}</span><Avatar member={{ name: "Thet Paing", initials: "TP", color: "#e7c6ad" }} /></div></header>
+        <header className="mb-8 flex flex-wrap items-center justify-between gap-4 border-b border-line pb-5"><div className="flex items-center gap-2 text-xs font-medium text-muted"><span>{workspaceName}</span><span className="text-[#a4aea7]">/</span><span className="text-ink">{pageLabel}</span></div><div className="flex items-center gap-3"><span className="hidden rounded-lg bg-white px-3 py-2 text-xs text-muted shadow-sm sm:inline-flex"><span className="mr-2 text-[#7f8a85]">Today</span>{dateLabel(todayKey, { weekday: "short", month: "short", day: "numeric" })}</span><Avatar member={{ name: signedInName, initials: signedInInitials, color: "#e7c6ad" }} />{cloudEnabled && <Button kind="outline" className="!px-3 !py-2" onClick={signOut}>Sign out</Button>}</div></header>
+        {cloudError && <div role="alert" className="mb-5 rounded-xl border border-[#f0d0ca] bg-[#fff5f2] px-4 py-3 text-sm text-[#9d4537]">{cloudError}</div>}
 
         {view === "overview" && <>
           <Title eyebrow="YOUR WEEK, AT A GLANCE" title="Good morning, team." description="A clear plan helps everyone know where they need to be and when." action={<Button onClick={() => addShift()}><span className="text-lg leading-none">+</span> Add shift</Button>} />
-          <div className="mb-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Shifts planned" value={weekShifts.length} detail={weekLabel} icon="▣" tint="bg-[#edf3e8] text-forest" /><StatCard label="Open shifts" value={openShifts.length} detail={openShifts.length ? "Need a team member" : "Everything has an owner"} icon="◷" tint="bg-[#fff1dd] text-[#946a2a]" /><StatCard label="Team members" value={saved.staff.length} detail="In this demo workspace" icon="♙" tint="bg-[#eaf1fb] text-[#5577a9]" /><StatCard label="Hours planned" value={hours + "h"} detail="All shifts this week" icon="✓" tint="bg-[#fbece9] text-[#b56656]" /></div>
+          <div className="mb-7 grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><StatCard label="Shifts planned" value={weekShifts.length} detail={weekLabel} icon="▣" tint="bg-[#edf3e8] text-forest" /><StatCard label="Open shifts" value={openShifts.length} detail={openShifts.length ? "Need a team member" : "Everything has an owner"} icon="◷" tint="bg-[#fff1dd] text-[#946a2a]" /><StatCard label="Team members" value={saved.staff.length} detail="In this workspace" icon="♙" tint="bg-[#eaf1fb] text-[#5577a9]" /><StatCard label="Hours planned" value={hours + "h"} detail="All shifts this week" icon="✓" tint="bg-[#fbece9] text-[#b56656]" /></div>
           <div className="grid gap-5 xl:grid-cols-[minmax(0,1.6fr)_minmax(280px,0.9fr)]">
             <section className="rounded-2xl border border-line bg-white p-5 sm:p-6"><div className="mb-5 flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-lg font-semibold">This week</h2><p className="mt-1 text-xs text-muted">{weekLabel}</p></div><Button kind="soft" onClick={() => setView("schedule")}>Open schedule <span>→</span></Button></div><div className="space-y-4">{days.map((day) => { const count = weekShifts.filter((s) => s.date === day.key).length; return <div key={day.key} className="grid grid-cols-[60px_minmax(0,1fr)_30px] items-center gap-3"><span><span className="block text-xs font-semibold">{day.weekday}</span><span className="mt-0.5 block text-[11px] text-muted">{day.num} {day.date.toLocaleDateString("en", { month: "short" })}</span></span><span className="h-2 overflow-hidden rounded-full bg-[#eef0eb]"><span className="block h-full rounded-full bg-[#8dbd68]" style={{ width: Math.min(100, count / 4 * 100) + "%" }} /></span><span className="text-right text-xs font-semibold text-muted">{count}</span></div>; })}</div><div className="mt-5 flex items-center gap-2 border-t border-line pt-4 text-xs text-muted"><span className="h-2 w-2 rounded-full bg-[#8dbd68]" /> Shifts scheduled each day <span className="ml-auto">Count</span></div></section>
             <section className="rounded-2xl border border-line bg-white p-5 sm:p-6"><div className="flex items-start justify-between gap-4"><div><h2 className="text-lg font-semibold">Coverage snapshot</h2><p className="mt-1 text-xs text-muted">Assigned shifts this week</p></div><span className="rounded-xl bg-[#edf3e8] px-2.5 py-1.5 text-xs font-bold text-forest">{coverage}%</span></div><div className="mt-6 flex items-center gap-5"><div className="flex h-28 w-28 shrink-0 items-center justify-center rounded-full" style={{ background: "conic-gradient(#8dbd68 " + coverage + "%, #edf0e8 0)" }}><div className="flex h-[84px] w-[84px] flex-col items-center justify-center rounded-full bg-white"><span className="text-2xl font-semibold">{assigned}</span><span className="text-[10px] text-muted">assigned</span></div></div><div className="space-y-3 text-sm"><p className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[#8dbd68]" /><span className="text-muted">Assigned</span><strong className="ml-4">{assigned}</strong></p><p className="flex items-center gap-2"><span className="h-2 w-2 rounded-full bg-[#efc28d]" /><span className="text-muted">Open</span><strong className="ml-4">{openShifts.length}</strong></p></div></div>{openShifts.length ? <div className="mt-6 rounded-xl border border-[#f2dfbd] bg-[#fffaf0] p-3.5"><p className="text-sm font-semibold text-[#7b5924]">{openShifts.length} shift{openShifts.length === 1 ? "" : "s"} need cover</p><p className="mt-1 text-xs leading-5 text-[#8b7754]">Review coverage and assign a teammate when ready.</p><Button kind="soft" className="mt-3 w-full" onClick={() => setView("coverage")}>Review open shifts</Button></div> : <div className="mt-6 rounded-xl bg-[#edf7e8] p-3.5 text-sm text-forest">All scheduled shifts have an owner.</div>}</section>
@@ -225,7 +438,7 @@ export default function App() {
         {view === "schedule" && <>
           <Title eyebrow="PLAN THE WORK" title="Team schedule" description="See who is working, keep shift ownership clear, and catch overlaps before they happen." action={<Button onClick={() => addShift()}><span className="text-lg leading-none">+</span> Add shift</Button>} />
           <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line bg-white p-3.5"><div className="flex items-center gap-2"><Button kind="outline" className="!px-3 !py-2" onClick={() => setWeekOffset((v) => v - 1)} aria-label="Previous week">←</Button><Button kind="outline" className="!px-3 !py-2" onClick={() => setWeekOffset(0)}>This week</Button><Button kind="outline" className="!px-3 !py-2" onClick={() => setWeekOffset((v) => v + 1)} aria-label="Next week">→</Button><div className="ml-1"><p className="text-sm font-semibold">{weekLabel}</p><p className="mt-0.5 text-[11px] text-muted">Monday – Sunday</p></div></div><div className="flex items-center gap-2 text-xs text-muted"><span className="h-2 w-2 rounded-full bg-[#8dbd68]" /> Assigned <span className="ml-2 h-2 w-2 rounded-full bg-[#efc28d]" /> Open shift</div></div>
-          <div className="overflow-x-auto rounded-2xl border border-line bg-white"><div className="min-w-[860px]"><div className="grid grid-cols-7 border-b border-line bg-[#fafbf8]">{days.map((day) => <div key={day.key} className={"border-r border-line px-3 py-4 last:border-r-0 " + (day.key === todayKey ? "bg-[#f0f6eb]" : "")}><p className="text-[11px] font-semibold uppercase tracking-wider text-muted">{day.weekday}</p><p className={"mt-1 text-lg font-semibold " + (day.key === todayKey ? "text-[#47763e]" : "text-ink")}>{day.num}</p><p className="mt-1 text-[10px] text-muted">{weekShifts.filter((s) => s.date === day.key).length} shifts</p></div>)}</div><div className="grid grid-cols-7 divide-x divide-line">{days.map((day) => { const list = weekShifts.filter((s) => s.date === day.key); return <div key={day.key} className={"min-h-[390px] space-y-2.5 p-2 " + (day.key === todayKey ? "bg-[#fbfdf8]" : "")}>{list.map((s) => <ShiftCard key={s.id} shift={s} member={memberFor(s.staffId)} onEdit={() => editShift(s)} />)}<button type="button" onClick={() => addShift(day.key)} className="flex w-full items-center justify-center gap-1 rounded-xl border border-dashed border-[#dfe5da] py-2 text-xs font-semibold text-[#869189] hover:border-[#9bbc89] hover:bg-[#f3f8ee] hover:text-forest">+ Add</button></div>; })}</div><div className="flex flex-wrap items-center justify-between gap-2 border-t border-line bg-[#fafbf8] px-4 py-3 text-xs text-muted"><span>{weekShifts.length} shifts · {hours} hours scheduled</span><span>{openShifts.length} open shift{openShifts.length === 1 ? "" : "s"} to cover</span></div></div></div><p className="mt-3 text-xs leading-5 text-muted">Click any shift to edit it. These sample shift windows are saved only in this browser.</p>
+          <div className="overflow-x-auto rounded-2xl border border-line bg-white"><div className="min-w-[860px]"><div className="grid grid-cols-7 border-b border-line bg-[#fafbf8]">{days.map((day) => <div key={day.key} className={"border-r border-line px-3 py-4 last:border-r-0 " + (day.key === todayKey ? "bg-[#f0f6eb]" : "")}><p className="text-[11px] font-semibold uppercase tracking-wider text-muted">{day.weekday}</p><p className={"mt-1 text-lg font-semibold " + (day.key === todayKey ? "text-[#47763e]" : "text-ink")}>{day.num}</p><p className="mt-1 text-[10px] text-muted">{weekShifts.filter((s) => s.date === day.key).length} shifts</p></div>)}</div><div className="grid grid-cols-7 divide-x divide-line">{days.map((day) => { const list = weekShifts.filter((s) => s.date === day.key); return <div key={day.key} className={"min-h-[390px] space-y-2.5 p-2 " + (day.key === todayKey ? "bg-[#fbfdf8]" : "")}>{list.map((s) => <ShiftCard key={s.id} shift={s} member={memberFor(s.staffId)} onEdit={() => editShift(s)} />)}<button type="button" onClick={() => addShift(day.key)} className="flex w-full items-center justify-center gap-1 rounded-xl border border-dashed border-[#dfe5da] py-2 text-xs font-semibold text-[#869189] hover:border-[#9bbc89] hover:bg-[#f3f8ee] hover:text-forest">+ Add</button></div>; })}</div><div className="flex flex-wrap items-center justify-between gap-2 border-t border-line bg-[#fafbf8] px-4 py-3 text-xs text-muted"><span>{weekShifts.length} shifts · {hours} hours scheduled</span><span>{openShifts.length} open shift{openShifts.length === 1 ? "" : "s"} to cover</span></div></div></div><p className="mt-3 text-xs leading-5 text-muted">Click any shift to edit it. {cloudEnabled ? "Changes are saved to your account workspace." : "Sample shift windows are saved only in this browser."}</p>
         </>}
 
         {view === "team" && <>
@@ -243,13 +456,13 @@ export default function App() {
           <div className="mt-4 flex justify-start"><Button kind="outline" onClick={() => setWeekOffset((v) => v - 1)}>← Previous week</Button><Button kind="outline" className="ml-2" onClick={() => setWeekOffset((v) => v + 1)}>Next week →</Button></div>
         </>}
 
-        <footer className="mt-8 flex flex-col gap-2 border-t border-line pt-5 text-[11px] text-muted sm:flex-row sm:items-center sm:justify-between"><span>ShiftBoard Lite <span className="mx-1 text-[#bac3bc]">/</span> React + Tailwind CSS</span><span>Learning prototype · Browser-local demo data only</span></footer>
+        <footer className="mt-8 flex flex-col gap-2 border-t border-line pt-5 text-[11px] text-muted sm:flex-row sm:items-center sm:justify-between"><span>ShiftBoard Lite <span className="mx-1 text-[#bac3bc]">/</span> React + Tailwind CSS</span><span>{cloudEnabled ? "Supabase-backed workspace · Private to your account" : "Learning prototype · Browser-local demo data only"}</span></footer>
       </main>
     </div>
 
     {modal === "shift" && <Modal title={editingShiftId ? "Edit shift" : "Add a shift"} description="Choose the date, shift window, and team member." onClose={() => setModal(null)}><form onSubmit={saveShift} className="space-y-4">{error && <div role="alert" className="rounded-xl border border-[#f0d0ca] bg-[#fff5f2] px-3.5 py-3 text-sm text-[#9d4537]">{error}</div>}<Field label="Shift date"><input className={inputClass} type="date" value={shiftForm.date} onChange={(e) => setShiftForm((v) => ({ ...v, date: e.target.value }))} required /></Field><Field label="Shift window"><select className={inputClass} value={shiftForm.type} onChange={(e) => setShiftForm((v) => ({ ...v, type: e.target.value }))}>{SHIFT_TYPES.map((t) => <option key={t.id} value={t.id}>{t.label} · {timeLabel(t.start)}–{timeLabel(t.end)}</option>)}</select></Field><Field label="Assign team member" hint="Leave unassigned to add it to the coverage queue."><select className={inputClass} value={shiftForm.staffId} onChange={(e) => setShiftForm((v) => ({ ...v, staffId: e.target.value }))}><option value="">Open shift — no assignee</option>{saved.staff.map((m) => <option key={m.id} value={m.id}>{m.name} · {m.role}</option>)}</select></Field><Field label="Shift note (optional)"><textarea className={inputClass} rows="3" maxLength={220} value={shiftForm.note} onChange={(e) => setShiftForm((v) => ({ ...v, note: e.target.value }))} placeholder="Site, handover, or useful details…" /></Field><div className="flex flex-col-reverse justify-between gap-2 border-t border-line pt-4 sm:flex-row">{editingShiftId ? <Button kind="danger" onClick={removeShift}>Delete shift</Button> : <span />}<div className="flex gap-2"><Button kind="outline" onClick={() => setModal(null)}>Cancel</Button><Button type="submit">{editingShiftId ? "Save changes" : "Create shift"}</Button></div></div></form></Modal>}
 
-    {modal === "team" && <Modal title="Add team member" description="Add a person to your local demo roster." onClose={() => setModal(null)}><form onSubmit={addTeamMember} className="space-y-4">{error && <div role="alert" className="rounded-xl border border-[#f0d0ca] bg-[#fff5f2] px-3.5 py-3 text-sm text-[#9d4537]">{error}</div>}<Field label="Full name"><input className={inputClass} maxLength={80} value={teamForm.name} onChange={(e) => setTeamForm((v) => ({ ...v, name: e.target.value }))} placeholder="e.g. Jamie Rivera" autoFocus required /></Field><Field label="Role"><select className={inputClass} value={teamForm.role} onChange={(e) => setTeamForm((v) => ({ ...v, role: e.target.value }))}><option>Team lead</option><option>Service specialist</option><option>Operations</option><option>Customer support</option></select></Field><div className="flex justify-end gap-2 border-t border-line pt-4"><Button kind="outline" onClick={() => setModal(null)}>Cancel</Button><Button type="submit">Add member</Button></div></form></Modal>}
+    {modal === "team" && <Modal title="Add team member" description="Add a person to this workspace roster." onClose={() => setModal(null)}><form onSubmit={addTeamMember} className="space-y-4">{error && <div role="alert" className="rounded-xl border border-[#f0d0ca] bg-[#fff5f2] px-3.5 py-3 text-sm text-[#9d4537]">{error}</div>}<Field label="Full name"><input className={inputClass} maxLength={80} value={teamForm.name} onChange={(e) => setTeamForm((v) => ({ ...v, name: e.target.value }))} placeholder="e.g. Jamie Rivera" autoFocus required /></Field><Field label="Role"><select className={inputClass} value={teamForm.role} onChange={(e) => setTeamForm((v) => ({ ...v, role: e.target.value }))}><option>Team lead</option><option>Service specialist</option><option>Operations</option><option>Customer support</option></select></Field><div className="flex justify-end gap-2 border-t border-line pt-4"><Button kind="outline" onClick={() => setModal(null)}>Cancel</Button><Button type="submit">Add member</Button></div></form></Modal>}
 
     {toast && <div role="status" className="fixed bottom-5 right-5 z-50 flex max-w-[calc(100vw-40px)] items-center gap-2 rounded-xl bg-forest px-4 py-3 text-sm font-semibold text-white shadow-xl"><span className="flex h-5 w-5 items-center justify-center rounded-full bg-leaf text-xs text-forest">✓</span>{toast}</div>}
   </div>;
