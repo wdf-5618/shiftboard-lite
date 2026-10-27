@@ -342,27 +342,52 @@ export default function App() {
     setError("");
     setModal("shift");
   }
-  function saveShift(event) {
+  async function saveShift(event) {
     event.preventDefault(); setError("");
     const item = { id: editingShiftId || idFor("shift"), date: shiftForm.date, type: shiftForm.type, staffId: shiftForm.staffId || null, note: shiftForm.note.trim() };
     if (!item.date || !SHIFT_TYPES.some((t) => t.id === item.type)) { setError("Choose a valid date and shift window."); return; }
     if (item.staffId && saved.shifts.some((s) => s.id !== editingShiftId && s.staffId === item.staffId && s.date === item.date && overlaps(s, item))) {
       setError("That team member already has an overlapping shift on this date. Choose another person or time."); return;
     }
-    setSaved((current) => ({ ...current, shifts: editingShiftId ? current.shifts.map((s) => s.id === editingShiftId ? item : s) : current.shifts.concat(item) }));
+    let persistedItem = item;
+    if (cloudEnabled) {
+      if (!workspace) { setError("Your workspace is still loading. Please try again."); return; }
+      const row = { workspace_id: workspace.id, shift_date: item.date, shift_type: item.type, staff_member_id: item.staffId, note: item.note };
+      if (editingShiftId) row.id = editingShiftId;
+      const result = await supabase.from("shifts").upsert(row).select("*").single();
+      if (result.error) {
+        setError(result.error.message?.includes("overlapping")
+          ? "That team member already has an overlapping shift on this date. Choose another person or time."
+          : result.error.message || "Could not save the shift. Please try again.");
+        return;
+      }
+      persistedItem = mapShiftRow(result.data);
+    }
+    setSaved((current) => ({ ...current, shifts: editingShiftId ? current.shifts.map((s) => s.id === editingShiftId ? persistedItem : s) : current.shifts.concat(persistedItem) }));
     setModal(null);
     toastMessage(editingShiftId ? "Shift updated." : item.staffId ? "Shift added to the schedule." : "Open shift added to coverage.");
   }
-  function removeShift() {
-    if (!editingShiftId || !window.confirm("Delete this shift from the local demo schedule?")) return;
+  async function removeShift() {
+    if (!editingShiftId || !window.confirm("Delete this shift from the workspace schedule?")) return;
+    if (cloudEnabled) {
+      const result = await supabase.from("shifts").delete().eq("id", editingShiftId).eq("workspace_id", workspace.id);
+      if (result.error) { setError(result.error.message || "Could not delete the shift."); return; }
+    }
     setSaved((current) => ({ ...current, shifts: current.shifts.filter((s) => s.id !== editingShiftId) }));
     setModal(null); toastMessage("Shift deleted.");
   }
-  function addTeamMember(event) {
+  async function addTeamMember(event) {
     event.preventDefault(); setError("");
     const name = teamForm.name.trim();
     if (name.length < 2) { setError("Enter a team member name."); return; }
-    const person = { id: idFor("staff"), name, role: teamForm.role, initials: initials(name), color: COLORS[saved.staff.length % COLORS.length] };
+    let person = { id: idFor("staff"), name, role: teamForm.role, initials: initials(name), color: COLORS[saved.staff.length % COLORS.length] };
+    if (cloudEnabled) {
+      const result = await supabase.from("staff_members").insert({
+        workspace_id: workspace.id, name, role: teamForm.role, initials: person.initials, color: person.color,
+      }).select("*").single();
+      if (result.error) { setError(result.error.message || "Could not add the team member."); return; }
+      person = mapStaffRow(result.data);
+    }
     setSaved((current) => ({ ...current, staff: current.staff.concat(person) }));
     setTeamForm({ name: "", role: "Service specialist" }); setModal(null); toastMessage(name + " added to the team.");
   }
