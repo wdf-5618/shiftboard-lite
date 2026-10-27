@@ -181,7 +181,14 @@ function AuthScreen() {
 
 export default function App() {
   const todayKey = dateKey(new Date());
-  const [saved, setSaved] = useState(loadState);
+  const cloudEnabled = Boolean(supabase);
+  const [authSession, setAuthSession] = useState(null);
+  const [authReady, setAuthReady] = useState(!cloudEnabled);
+  const [workspace, setWorkspace] = useState(null);
+  const [cloudLoading, setCloudLoading] = useState(cloudEnabled);
+  const [cloudError, setCloudError] = useState("");
+  const [loadAttempt, setLoadAttempt] = useState(0);
+  const [saved, setSaved] = useState(() => cloudEnabled ? { staff: [], shifts: [] } : loadState());
   const [view, setView] = useState("overview");
   const [weekOffset, setWeekOffset] = useState(0);
   const [modal, setModal] = useState(null);
@@ -193,7 +200,118 @@ export default function App() {
   const [shiftForm, setShiftForm] = useState({ date: todayKey, type: "opening", staffId: "", note: "" });
   const [teamForm, setTeamForm] = useState({ name: "", role: "Service specialist" });
 
-  useEffect(() => { try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(saved)); } catch (e) { console.warn("ShiftBoard Lite could not save local data.", e); } }, [saved]);
+  useEffect(() => {
+    if (cloudEnabled) return;
+    try { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(saved)); }
+    catch (e) { console.warn("ShiftBoard Lite could not save local data.", e); }
+  }, [saved, cloudEnabled]);
+
+  useEffect(() => {
+    if (!supabase) return undefined;
+    let active = true;
+    supabase.auth.getSession().then(({ data, error: sessionError }) => {
+      if (!active) return;
+      if (sessionError) setCloudError(sessionError.message);
+      setAuthSession(data?.session || null);
+      setAuthReady(true);
+      setCloudLoading(Boolean(data?.session));
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (!active) return;
+      setAuthSession(nextSession);
+      if (nextSession) {
+        setCloudLoading(true);
+        setCloudError("");
+      } else {
+        setWorkspace(null);
+        setSaved({ staff: [], shifts: [] });
+        setCloudLoading(false);
+        setCloudError("");
+      }
+    });
+    return () => { active = false; subscription.unsubscribe(); };
+  }, []);
+
+  useEffect(() => {
+    if (!cloudEnabled || !authSession?.user?.id) return undefined;
+    let active = true;
+    async function loadWorkspace() {
+      setCloudLoading(true);
+      setCloudError("");
+      try {
+        const user = authSession.user;
+        let { data: currentWorkspace, error: workspaceError } = await supabase
+          .from("workspaces").select("*").eq("owner_id", user.id).maybeSingle();
+        if (workspaceError) throw workspaceError;
+        if (!currentWorkspace) {
+          const created = await supabase.from("workspaces")
+            .insert({ owner_id: user.id, name: "Northstar Services" }).select("*").single();
+          if (created.error && created.error.code !== "23505") throw created.error;
+          if (created.data) currentWorkspace = created.data;
+          else {
+            const retry = await supabase.from("workspaces").select("*").eq("owner_id", user.id).maybeSingle();
+            if (retry.error) throw retry.error;
+            currentWorkspace = retry.data;
+          }
+        }
+        if (!currentWorkspace) throw new Error("Your workspace could not be loaded. Please try again.");
+
+        const [staffResult, shiftsResult] = await Promise.all([
+          supabase.from("staff_members").select("*").eq("workspace_id", currentWorkspace.id).order("created_at"),
+          supabase.from("shifts").select("*").eq("workspace_id", currentWorkspace.id).order("shift_date").order("shift_type"),
+        ]);
+        if (staffResult.error) throw staffResult.error;
+        if (shiftsResult.error) throw shiftsResult.error;
+        let staffRows = staffResult.data || [];
+        let shiftRows = shiftsResult.data || [];
+
+        if (staffRows.length === 0 && shiftRows.length === 0) {
+          const seededStaff = await supabase.from("staff_members").insert(
+            INITIAL_TEAM.map((member) => ({
+              workspace_id: currentWorkspace.id,
+              name: member.name,
+              role: member.role,
+              initials: member.initials,
+              color: member.color,
+            }))
+          ).select("*");
+          if (seededStaff.error) throw seededStaff.error;
+          staffRows = seededStaff.data || [];
+          const idByInitials = new Map(staffRows.map((member) => [member.initials, member.id]));
+          const seedRows = seedShifts().map((shift) => {
+            const originalMember = INITIAL_TEAM.find((member) => member.id === shift.staffId);
+            return {
+              workspace_id: currentWorkspace.id,
+              staff_member_id: originalMember ? idByInitials.get(originalMember.initials) || null : null,
+              shift_date: shift.date,
+              shift_type: shift.type,
+              note: shift.note || "",
+            };
+          });
+          const seededShifts = await supabase.from("shifts").insert(seedRows);
+          if (seededShifts.error) throw seededShifts.error;
+          const [staffReload, shiftReload] = await Promise.all([
+            supabase.from("staff_members").select("*").eq("workspace_id", currentWorkspace.id).order("created_at"),
+            supabase.from("shifts").select("*").eq("workspace_id", currentWorkspace.id).order("shift_date").order("shift_type"),
+          ]);
+          if (staffReload.error) throw staffReload.error;
+          if (shiftReload.error) throw shiftReload.error;
+          staffRows = staffReload.data || [];
+          shiftRows = shiftReload.data || [];
+        }
+
+        if (!active) return;
+        setWorkspace(currentWorkspace);
+        setSaved({ staff: staffRows.map(mapStaffRow), shifts: shiftRows.map(mapShiftRow) });
+      } catch (err) {
+        if (active) setCloudError(err?.message || "The workspace could not be loaded.");
+      } finally {
+        if (active) setCloudLoading(false);
+      }
+    }
+    loadWorkspace();
+    return () => { active = false; };
+  }, [cloudEnabled, authSession?.user?.id, loadAttempt]);
 
   const weekStart = useMemo(() => addDays(mondayOf(new Date()), weekOffset * 7), [weekOffset]);
   const days = useMemo(() => Array.from({ length: 7 }, (_, i) => { const d = addDays(weekStart, i); return { date: d, key: dateKey(d), weekday: d.toLocaleDateString("en", { weekday: "short" }), num: d.getDate() }; }), [weekStart]);
