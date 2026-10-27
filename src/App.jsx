@@ -123,6 +123,62 @@ function Modal({ title, description, onClose, children }) {
   return <div className="fixed inset-0 z-40 flex items-end justify-center bg-[#14211f]/45 p-0 backdrop-blur-[2px] sm:items-center sm:p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}><section role="dialog" aria-modal="true" aria-labelledby="modal-title" className="max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-3xl border border-line bg-white p-5 shadow-2xl sm:rounded-3xl sm:p-6"><div className="mb-5 flex items-start justify-between gap-4"><div><h2 id="modal-title" className="text-xl font-semibold">{title}</h2><p className="mt-1.5 text-sm leading-5 text-muted">{description}</p></div><button type="button" onClick={onClose} aria-label="Close dialog" className="rounded-xl p-2 text-muted hover:bg-[#f1f3ed] hover:text-ink">×</button></div>{children}</section></div>;
 }
 
+
+function mapStaffRow(row) {
+  return { id: row.id, name: row.name, role: row.role, initials: row.initials || initials(row.name), color: row.color || "#dce5d9" };
+}
+function mapShiftRow(row) {
+  return { id: row.id, date: row.shift_date, type: row.shift_type, staffId: row.staff_member_id || null, note: row.note || "" };
+}
+function LoadingScreen({ message = "Loading your workspace…" }) {
+  return <div className="flex min-h-screen items-center justify-center bg-canvas px-5 text-ink"><div className="w-full max-w-sm rounded-3xl border border-line bg-white p-8 text-center shadow-sm"><div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-forest text-xl font-black text-white">S</div><h1 className="mt-5 text-xl font-semibold">ShiftBoard Lite</h1><p className="mt-2 text-sm text-muted">{message}</p></div></div>;
+}
+function AuthScreen() {
+  const [mode, setMode] = useState("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+
+  async function submit(event) {
+    event.preventDefault();
+    setBusy(true); setError(""); setMessage("");
+    try {
+      const result = mode === "signin"
+        ? await supabase.auth.signInWithPassword({ email: email.trim(), password })
+        : await supabase.auth.signUp({ email: email.trim(), password, options: { emailRedirectTo: window.location.origin } });
+      if (result.error) throw result.error;
+      if (mode === "signup" && !result.data.session) {
+        setMessage("Account created. Check your email for the confirmation link, then sign in here.");
+      } else {
+        setMessage("Signed in. Loading your private workspace…");
+      }
+    } catch (err) {
+      setError(err?.message || "Authentication failed. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <div className="flex min-h-screen items-center justify-center bg-canvas px-4 py-10 text-ink">
+    <div className="w-full max-w-md rounded-3xl border border-line bg-white p-6 shadow-[0_8px_36px_rgba(31,42,42,0.06)] sm:p-8">
+      <div className="flex items-center gap-3"><span className="flex h-11 w-11 items-center justify-center rounded-[14px] bg-forest text-lg font-black text-white">S</span><div><p className="text-lg font-bold tracking-tight">ShiftBoard Lite</p><p className="text-xs text-muted">Staff scheduling workspace</p></div></div>
+      <h1 className="mt-8 text-2xl font-semibold tracking-tight">{mode === "signin" ? "Welcome back" : "Create your workspace"}</h1>
+      <p className="mt-2 text-sm leading-6 text-muted">{mode === "signin" ? "Sign in to view and manage your team's schedule." : "Create an account to save your team's schedule to your own database workspace."}</p>
+      <form className="mt-6 space-y-4" onSubmit={submit}>
+        {error && <div role="alert" className="rounded-xl border border-[#f0d0ca] bg-[#fff5f2] px-3.5 py-3 text-sm text-[#9d4537]">{error}</div>}
+        {message && <div role="status" className="rounded-xl border border-[#d8e7ce] bg-[#f4f9ef] px-3.5 py-3 text-sm text-forest">{message}</div>}
+        <Field label="Email address"><input className={inputClass} type="email" autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)} maxLength={254} required /></Field>
+        <Field label="Password" hint={mode === "signup" ? "Use at least 8 characters." : undefined}><input className={inputClass} type="password" autoComplete={mode === "signin" ? "current-password" : "new-password"} value={password} onChange={(event) => setPassword(event.target.value)} minLength={mode === "signup" ? 8 : undefined} required /></Field>
+        <button type="submit" disabled={busy} className="flex w-full items-center justify-center rounded-xl bg-forest px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#2d5148] disabled:cursor-wait disabled:opacity-60">{busy ? "Please wait…" : mode === "signin" ? "Sign in" : "Create account"}</button>
+      </form>
+      <p className="mt-5 text-center text-sm text-muted">{mode === "signin" ? "New to ShiftBoard Lite?" : "Already have an account?"}{" "}<button type="button" className="font-semibold text-forest underline underline-offset-4" onClick={() => { setMode(mode === "signin" ? "signup" : "signin"); setError(""); setMessage(""); }}>{mode === "signin" ? "Create an account" : "Sign in"}</button></p>
+      <p className="mt-6 border-t border-line pt-4 text-xs leading-5 text-muted">Use fictional staff details for this learning project. Your schedule is scoped to your signed-in account.</p>
+    </div>
+  </div>;
+}
+
 export default function App() {
   const todayKey = dateKey(new Date());
   const [saved, setSaved] = useState(loadState);
