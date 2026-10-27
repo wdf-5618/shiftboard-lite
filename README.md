@@ -62,6 +62,10 @@ For email confirmation, configure the app URL and redirect URLs in Supabase Auth
 
 When the environment variables are absent, the front end stays in local demo mode using `localStorage`. In this mode records are browser-specific and are not shared.
 
+## Verification status
+
+The production signup, email-confirmation redirect, sign-in, and saved-workspace flow have been manually verified with a test account. Automated end-to-end tests, broader cross-browser checks, and a two-account test of workspace isolation remain future work.
+
 ## Important limitations
 
 This remains a learning prototype. It is not a full workforce-management product; it has no payroll, notifications, external calendar integration, role-based team invitations, or multi-workspace switching. Use fictional data only.
