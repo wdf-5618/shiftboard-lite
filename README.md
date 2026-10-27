@@ -2,6 +2,8 @@
 
 ShiftBoard Lite is a responsive weekly staff scheduler for a fictional small service team. It is a practical learning project for React, Tailwind CSS, authentication, database design, and row-level access control.
 
+**Live demo:** [Open ShiftBoard Lite](https://shiftboard-lite.vercel.app). Use fictional data only.
+
 ## Stack
 
 - React 19 and Vite
